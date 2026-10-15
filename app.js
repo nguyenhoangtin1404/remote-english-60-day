@@ -8,6 +8,8 @@
   var DAY_MS = 864e5, SRS_GAP = [0, 1, 3, 7, 14, 30];   // khoảng ôn (ngày) theo hộp Leitner 1..5
   var app = document.getElementById('app'), side = document.getElementById('sidebar');
   var byDay = {}; DAYS.forEach(function (d) { byDay[d.day] = d; });
+  var NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  var PL = NATIVE && window.Capacitor.Plugins || {};      // plugin Capacitor (Haptics, StatusBar, App, Filesystem, Share)
 
   /* ---------- state ---------- */
   function blank() { return { days: {}, assess: { before: {}, after: {} }, srs: {}, log: {}, last: 1, lastExport: 0 }; }
@@ -30,6 +32,18 @@
   function sum(a) { return a.reduce(function (x, y) { return x + y; }, 0); }
   function ic(name, cls) { return '<svg class="ic' + (cls ? ' ' + cls : '') + '" aria-hidden="true"><use href="#i-' + name + '"/></svg>'; }
   function nextDay() { return DAYS.filter(function (d) { return !(S.days[d.day] && S.days[d.day].done); })[0]; }
+  function reduced() { return matchMedia('(prefers-reduced-motion: reduce)').matches; }
+  function noop() {}
+  function haptic(kind) {   // chỉ trong APK: rung nhẹ khi chấm thẻ, rung "thành công" khi hoàn thành ngày
+    if (!PL.Haptics) return;
+    try { (kind === 'success' ? PL.Haptics.notification({ type: 'SUCCESS' }) : PL.Haptics.impact({ style: 'LIGHT' })).catch(noop); } catch (e) {}
+  }
+  var modals = [];          // hàm đóng của sheet / onboarding đang mở — dùng cho Esc và nút Back Android
+  function trapTab(e, root) {
+    var f = $$('button, a[href], input', root).filter(function (x) { return !x.disabled && x.offsetParent !== null; }), a = f[0], z = f[f.length - 1];
+    if (!a) return;
+    if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); } else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
+  }
 
   /* ---------- chuỗi ngày học: mỗi 7 ngày được nghỉ 1 ngày (như ngày Pro-tip) mà không đứt chuỗi ---------- */
   function dkey(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
@@ -103,6 +117,7 @@
     c.due = today() + SRS_GAP[c.box] * DAY_MS; logActivity(); save();
   }
   function srsDue() { var t = today(); return Object.keys(S.srs).filter(function (k) { return CARD[k] && S.srs[k].due <= t; }); }
+  function srsNext() { var t = today(), m = 0; Object.keys(S.srs).forEach(function (k) { var d = S.srs[k].due; if (CARD[k] && d > t && (!m || d < m)) m = d; }); return m; }   // lượt ôn kế tiếp (sau hôm nay)
 
   /* ---------- giao diện sáng / tối (lưu riêng trên thiết bị, không nằm trong file tiến độ) ---------- */
   var THEME_KEY = 'eri60_theme', darkMq = matchMedia('(prefers-color-scheme: dark)');
@@ -111,7 +126,12 @@
     var el = document.documentElement;
     if (t === 'light' || t === 'dark') el.setAttribute('data-theme', t); else el.removeAttribute('data-theme');
     var dark = t === 'dark' || (t !== 'light' && darkMq.matches), m = document.getElementById('themeColor');
-    if (m) m.content = dark ? '#0B1120' : '#F8FAFC';
+    var bg = getComputedStyle(el).getPropertyValue('--c-bg').trim();   // màu nền lấy từ token, không viết hex ở đây
+    if (m && bg) m.content = bg;
+    if (PL.StatusBar) try {   // APK: status bar cùng màu nền, chữ sáng/tối theo theme
+      PL.StatusBar.setStyle({ style: dark ? 'DARK' : 'LIGHT' }).catch(noop);
+      if (bg) PL.StatusBar.setBackgroundColor({ color: bg }).catch(noop);
+    } catch (e) {}
   }
   function setTheme(t) { try { localStorage.setItem(THEME_KEY, t); } catch (e) {} applyTheme(t); }
   applyTheme(themePref());
@@ -167,7 +187,12 @@
     if (h.indexOf('#/settings') === 0) { renderSettings(); renderChrome('settings'); return; }
     renderToday(); renderChrome('home');
   }
-  window.addEventListener('hashchange', route);
+  // Chuyển trang bằng View Transitions API; trình duyệt chưa hỗ trợ hoặc bật giảm chuyển động thì đổi trang tức thì
+  function navigate() {
+    if (!document.startViewTransition || reduced() || document.hidden) { route(); return; }
+    try { document.startViewTransition(route); } catch (e) { route(); }
+  }
+  window.addEventListener('hashchange', navigate);
 
   /* ---------- Hôm nay ---------- */
   function dayProgress(d) {   // [nhãn, đã xong?] cho từng phần của 1 ngày
@@ -288,7 +313,8 @@
     h += '<div class="eyebrow">Khoá học</div><div class="set-list">' +
       '<div class="set-row">' + ic('flame') + '<span class="grow">Chuỗi ngày học: <b class="num">' + sk.n + ' ngày</b><small>Mỗi 7 ngày được nghỉ 1 ngày (như ngày Pro-tip) mà chuỗi không bị đứt.</small></span></div>' +
       '<a class="set-row" href="#/assess">' + ic('star') + '<span class="grow">Tự đánh giá đầu / cuối khoá<small>8 năng lực cốt lõi</small></span>' + ic('chevron-right', 'chev') + '</a>' +
-      '<details><summary class="set-row">' + ic('clock') + '<span class="grow">Quy trình 30 phút mỗi ngày</span>' + ic('chevron-right', 'chev') + '</summary><div class="set-block">' + workflowCard() + '</div></details></div>';
+      '<details><summary class="set-row">' + ic('clock') + '<span class="grow">Quy trình 30 phút mỗi ngày</span>' + ic('chevron-right', 'chev') + '</summary><div class="set-block">' + workflowCard() + '</div></details>' +
+      '<button type="button" class="set-row" id="obAgain">' + ic('sparkles') + '<span class="grow">Xem lại phần giới thiệu</span>' + ic('chevron-right', 'chev') + '</button></div>';
     h += offlineCard();
     h += '<div class="eyebrow">Sao lưu tiến độ</div><div class="set-list"><div class="set-block"><p class="hint">Tiến độ lưu trên máy này' + (S.lastExport ? ' · lần xuất gần nhất: ' + new Date(S.lastExport).toLocaleDateString('vi-VN') : '') + '. Xuất file để chuyển sang máy khác hoặc phòng khi xoá dữ liệu.</p>' +
       '<div class="row"><button class="btn" id="exp">' + ic('download') + 'Xuất tiến độ</button><label class="btn" tabindex="0" id="impL">' + ic('upload') + 'Nhập tiến độ<input type="file" id="imp" accept=".json,application/json" hidden></label></div></div></div>';
@@ -299,6 +325,7 @@
     $$('#themeSeg button').forEach(function (b) {
       b.onclick = function () { $$('#themeSeg button').forEach(function (x) { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); setTheme(b.getAttribute('data-v')); };
     });
+    $('#obAgain').onclick = onboarding;
     $('#exp').onclick = function () { exportProgress(); renderSettings(); };
     $('#impL').onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#imp').click(); } };
     $('#imp').onchange = function (e) { var f = e.target.files[0]; e.target.value = ''; if (f) importProgress(f); };
@@ -307,7 +334,6 @@
   }
 
   /* ---------- cài app + tải audio để học offline (chỉ bản web; bản APK đã kèm sẵn audio) ---------- */
-  var NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   var AUDIO_CACHE = 'eri60-audio', installEvt = null;
   var STANDALONE = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
   var IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -389,7 +415,7 @@
     nav.innerHTML = labels.map(function (l, i) { return '<button type="button" data-i="' + i + '"><i></i><span>' + esc(l) + '</span></button>'; }).join('');
     headEl.insertAdjacentElement('afterend', nav);
     var btns = $$('button', nav);
-    btns.forEach(function (b, i) { b.onclick = function () { secs[i].scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); }; });
+    btns.forEach(function (b, i) { b.onclick = function () { secs[i].scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' }); }; });
     function mark(i) { btns.forEach(function (b, k) { b.classList.toggle('on', k === i); if (k === i) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current'); }); }
     if ('IntersectionObserver' in window) {
       var io = new IntersectionObserver(function (es) {
@@ -469,8 +495,9 @@
     }
     function finish() {
       st.done = true; logActivity(); if (d.phrases) srsAddDay(d.day); save();
+      haptic('success'); var fx = celebrate();
       toast('Hoàn thành ngày ' + d.day + ' — tuyệt vời!');
-      if (nx) setTimeout(function () { if (location.hash === '#/day/' + d.day) location.hash = '#/day/' + nx.day; }, 700);
+      if (nx) setTimeout(function () { if (location.hash === '#/day/' + d.day) location.hash = '#/day/' + nx.day; }, fx ? 1500 : 700);
       else { updBar(); renderChrome(d.day); }
     }
     function complete() {
@@ -490,6 +517,67 @@
   }
   function stepChanged() { app.dispatchEvent(new Event('step')); }
 
+  /* ---------- hiệu ứng hoàn thành ngày: dấu check + confetti CSS (tắt khi giảm chuyển động) ---------- */
+  function celebrate() {
+    if (reduced()) return false;
+    var w = document.createElement('div'), h = '';
+    w.className = 'celebrate'; w.setAttribute('aria-hidden', 'true');
+    for (var i = 0; i < 28; i++) {
+      h += '<i class="cf' + (i % 4) + '" style="--x:' + (Math.random() * 2 - 1).toFixed(2) + ';--y:' + Math.random().toFixed(2) +
+        ';--r:' + Math.round(Math.random() * 720 - 360) + 'deg;--dl:' + Math.round(Math.random() * 120) + 'ms"></i>';
+    }
+    w.innerHTML = h + '<div class="cel-check"><svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-15"/></svg></div>';
+    document.body.appendChild(w);
+    setTimeout(function () { w.remove(); }, 1700);
+    return true;
+  }
+
+  /* ---------- onboarding 3 slide (lần đầu mở app; xem lại được trong Cài đặt) ---------- */
+  function onboarding() {
+    if ($('.ob')) return;
+    var slides = [
+      ['clock', 'Mỗi ngày 30 phút', 'Mỗi bài học đi qua 4 bước, làm lần lượt từ trên xuống:',
+        '<ul class="ob-list"><li><b class="num">5′</b>Cụm từ: nghe và đọc to</li><li><b class="num">8′</b>Dịch và viết</li><li><b class="num">7′</b>Nghe hiểu</li><li><b class="num">10′</b>Nói, ghi âm và tự sửa</li></ul>'],
+      ['flame', 'Giữ chuỗi ngày học', 'Học bài hoặc ôn thẻ mỗi ngày để chuỗi tăng lên. Mỗi 7 ngày bạn được nghỉ 1 ngày mà chuỗi không bị đứt.', ''],
+      [NATIVE ? 'headphones' : 'download', 'Học cả khi không có mạng', NATIVE ? 'Toàn bộ audio đã có sẵn trong app — học được ở bất cứ đâu, không cần mạng.' :
+        'Vào <b>Cài đặt › Tải audio học offline</b> (~60MB, nên dùng Wi‑Fi). Có thể cài trang này như một app trên điện thoại.', '']
+    ];
+    var prev = document.activeElement, w = document.createElement('div'), idx = 0, closed = false;
+    w.className = 'ob'; w.setAttribute('role', 'dialog'); w.setAttribute('aria-modal', 'true'); w.setAttribute('aria-label', 'Giới thiệu cách học');
+    w.innerHTML = '<button type="button" class="btn ghost ob-skip">Bỏ qua</button><div class="ob-track">' + slides.map(function (s, i) {
+      return '<section class="ob-slide" aria-roledescription="slide" aria-label="' + (i + 1) + ' / ' + slides.length + '"' + (i ? ' aria-hidden="true"' : '') + '>' +
+        '<span class="ob-ic">' + ic(s[0]) + '</span><h2>' + s[1] + '</h2><p>' + s[2] + '</p>' + s[3] + '</section>';
+    }).join('') + '</div><div class="ob-foot"><div class="ob-dots" aria-hidden="true">' + slides.map(function () { return '<i></i>'; }).join('') + '</div>' +
+      '<button type="button" class="btn primary lg block ob-next"></button></div>';
+    document.body.appendChild(w); document.body.classList.add('lock');
+    var track = $('.ob-track', w), next = $('.ob-next', w), dots = $$('.ob-dots i', w), secs = $$('.ob-slide', w);
+    function mark(i) {
+      idx = i; dots.forEach(function (d, k) { d.classList.toggle('on', k === i); });
+      secs.forEach(function (s, k) { if (k === i) s.removeAttribute('aria-hidden'); else s.setAttribute('aria-hidden', 'true'); });
+      next.innerHTML = i === slides.length - 1 ? 'Bắt đầu học' + ic('arrow-right') : 'Tiếp' + ic('chevron-right');
+    }
+    function goTo(i) { track.scrollTo({ left: i * track.clientWidth, behavior: reduced() ? 'auto' : 'smooth' }); mark(i); }
+    function close() {
+      if (closed) return; closed = true;
+      S.intro = 1; save();
+      modals.splice(modals.indexOf(close), 1);
+      document.removeEventListener('keydown', key); document.body.classList.remove('lock');
+      w.classList.remove('open'); setTimeout(function () { w.remove(); }, 220);
+      if (prev && prev.isConnected && prev.focus && prev !== document.body) prev.focus(); else app.focus({ preventScroll: true });
+    }
+    function key(e) {
+      if (e.key === 'Escape') close();
+      else if (e.key === 'ArrowRight' && idx < slides.length - 1) goTo(idx + 1);
+      else if (e.key === 'ArrowLeft' && idx > 0) goTo(idx - 1);
+      else if (e.key === 'Tab') trapTab(e, w);
+    }
+    var st; track.addEventListener('scroll', function () { clearTimeout(st); st = setTimeout(function () { var i = Math.round(track.scrollLeft / track.clientWidth); if (i !== idx) mark(i); }, 60); }, { passive: true });
+    next.onclick = function () { if (idx >= slides.length - 1) close(); else goTo(idx + 1); };
+    $('.ob-skip', w).onclick = close;
+    document.addEventListener('keydown', key); modals.push(close);
+    mark(0); requestAnimationFrame(function () { w.classList.add('open'); }); next.focus();
+  }
+
   /* ---------- bottom sheet (thay confirm() của trình duyệt) ---------- */
   function sheet(html, buttons) {
     var prev = document.activeElement, w = document.createElement('div'), closed = false;
@@ -500,18 +588,18 @@
     requestAnimationFrame(function () { w.classList.add('open'); });
     function close(fn) {
       if (closed) return; closed = true;
+      modals.splice(modals.indexOf(dismiss), 1);
       document.removeEventListener('keydown', key); w.classList.remove('open'); document.body.classList.remove('lock');
       setTimeout(function () { w.remove(); }, 260);
       if (prev && prev.isConnected && prev.focus) prev.focus();
       if (fn) fn();
     }
+    function dismiss() { close(); }
     function key(e) {
-      if (e.key === 'Escape') { close(); return; }
-      if (e.key !== 'Tab') return;
-      var f = $$('button', w), a = f[0], z = f[f.length - 1];
-      if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); } else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
+      if (e.key === 'Escape') close();
+      else if (e.key === 'Tab') trapTab(e, w);
     }
-    document.addEventListener('keydown', key);
+    document.addEventListener('keydown', key); modals.push(dismiss);
     $('.sheet-scrim', w).onclick = function () { close(); };
     $$('.sheet-act button', w).forEach(function (b) { b.onclick = function () { close(buttons[+b.getAttribute('data-i')][2]); }; });
     $('.sheet-act button', w).focus();
@@ -722,27 +810,54 @@
 
   /* ---------- review (theo bản in: 30 phút, KHÔNG xem tài liệu 10 phút đầu) ---------- */
   function flashcards(cards, opt) {
-    // opt: {grade:true} để hiện nút Nhớ/Chưa nhớ (ghi vào hộp ôn)
-    return '<div class="flash" id="fc" role="button" tabindex="0" aria-live="polite"></div><div class="row" style="margin-top:10px;justify-content:space-between">' +
-      '<div class="row"><button type="button" class="btn" id="fcPrev" aria-label="Thẻ trước">' + ic('arrow-left') + '</button><button type="button" class="btn" id="fcNext" aria-label="Thẻ sau">' + ic('arrow-right') + '</button>' +
-      (opt && opt.shuffle !== false ? '<button type="button" class="btn" id="fcShuf">' + ic('shuffle') + 'Trộn</button>' : '') + '<button type="button" class="btn" id="fcSay">' + ic('volume-2') + 'Nghe</button></div>' +
-      '<span class="meta" id="fcPos"></span></div>' +
-      (opt && opt.grade ? '<div class="row" id="fcGrade" style="margin-top:8px;display:none"><button type="button" class="btn" id="fcNo">' + ic('x') + 'Chưa nhớ</button><button type="button" class="btn ok" id="fcYes">' + ic('check') + 'Nhớ</button><span class="meta">Ghi vào hộp ôn ngắt quãng</span></div>' : '') +
-      '<div class="row" style="margin-top:8px"><label class="meta"><input type="checkbox" id="fcDir"> Đảo chiều (EN → VN)</label></div>';
+    // opt: {grade:true} để hiện nút Chưa nhớ / Đã nhớ (ghi vào hộp ôn); {shuffle:false} để ẩn nút Trộn
+    opt = opt || {};
+    return '<div class="fc-sess"><div class="fc-top"><span class="fc-bar" aria-hidden="true"><i id="fcBar"></i></span><b class="num" id="fcPos" aria-live="polite"></b></div>' +
+      '<div class="flash" id="fc" role="button" tabindex="0" aria-label="Lật thẻ"><div class="fc-in">' +
+      '<div class="fc-face fc-front" id="fcF"></div><div class="fc-face fc-back" id="fcB"></div></div></div>' +
+      '<div class="fc-tools"><button type="button" class="btn" id="fcPrev" aria-label="Thẻ trước">' + ic('arrow-left') + '</button><button type="button" class="btn" id="fcNext" aria-label="Thẻ sau">' + ic('arrow-right') + '</button>' +
+      (opt.shuffle !== false ? '<button type="button" class="btn" id="fcShuf" aria-label="Trộn thẻ">' + ic('shuffle') + '</button>' : '') +
+      '<button type="button" class="btn" id="fcSay">' + ic('volume-2') + 'Nghe</button>' +
+      '<label class="switch"><input type="checkbox" id="fcDir"><span class="track" aria-hidden="true"></span>EN → VN</label></div>' +
+      '<div class="fc-grade" id="fcGrade"><button type="button" class="btn lg primary" id="fcFlip">' + ic('rotate-ccw') + 'Lật thẻ</button>' +
+      (opt.grade ? '<button type="button" class="btn lg no" id="fcNo" hidden>' + ic('x') + 'Chưa nhớ</button><button type="button" class="btn lg ok" id="fcYes" hidden>' + ic('check') + 'Đã nhớ</button>' : '') + '</div></div>' +
+      '<div id="fcEnd" hidden></div>';
+  }
+  function dueLabel(t) {
+    var n = Math.round((t - today()) / DAY_MS);
+    return n <= 1 ? 'ngày mai' : new Date(t).toLocaleDateString('vi-VN', { weekday: 'long', day: 'numeric', month: 'numeric' }) + ' (' + n + ' ngày nữa)';
   }
   function bindFlash(cards, opt) {
     opt = opt || {};
     var order = cards.map(function (_, i) { return i; }), pos = 0, flipped = false, fc = $('#fc');
+    var total = cards.length, graded = 0, known = 0;   // dùng cho phiên ôn (removeOnGrade)
     function cur() { return cards[order[pos]]; }
-    function show() {
-      if (!cards.length) { fc.innerHTML = '<div>' + (opt.empty || 'Không có thẻ.') + '</div>'; ['#fcPrev', '#fcNext', '#fcShuf', '#fcSay'].forEach(function (s) { if ($(s)) $(s).disabled = true; }); return; }
-      var c = cur(), rev = $('#fcDir').checked, front = rev ? c.en : c.vn, back = rev ? c.vn : c.en;
-      fc.innerHTML = '<div><span' + ((flipped ? !rev : rev) ? ' lang="en"' : '') + '>' + esc(flipped ? back : front) + '</span><small>' + (flipped ? 'Ngày ' + c.day + ' · chạm để lật lại' : 'Nói to câu trả lời, rồi chạm để xem') + '</small></div>';
-      fc.classList.toggle('back', flipped);
-      $('#fcPos').textContent = (pos + 1) + ' / ' + cards.length;
-      if ($('#fcGrade')) $('#fcGrade').style.display = flipped ? '' : 'none';
+    function face(txt, en, hint) { return '<span class="fc-k">' + (en ? 'English' : 'Tiếng Việt') + '</span><span' + (en ? ' lang="en"' : '') + '>' + esc(txt) + '</span><small>' + hint + '</small>'; }
+    function finish() {   // hết thẻ: màn kết thúc phiên ôn hoặc trạng thái trống
+      $('.fc-sess').hidden = true;
+      var end = $('#fcEnd'), nx = srsNext();
+      end.hidden = false;
+      end.innerHTML = '<div class="fc-end">' + (graded ? ic('circle-check') + '<h3>Xong phiên ôn!</h3><p>Đã nhớ <b class="num">' + known + '/' + graded + '</b> thẻ' +
+        (graded > known ? ' · ' + (graded - known) + ' thẻ sẽ gặp lại ngày mai' : '') + '</p>' : ic('calendar') + '<p>' + (opt.empty || 'Không có thẻ.') + '</p>') +
+        (nx ? '<p class="meta">' + ic('calendar') + 'Lượt ôn tiếp theo: <b>' + dueLabel(nx) + '</b></p>' : '') +
+        (graded ? '<a class="btn primary" href="#/">' + ic('house') + 'Về Hôm nay</a>' : '') + '</div>';
     }
-    function go(k) { if (!cards.length) return; pos = (pos + k + cards.length) % cards.length; flipped = false; show(); }
+    function show(instant) {
+      if (!cards.length) { finish(); return; }
+      var c = cur(), rev = $('#fcDir').checked;
+      if (instant) fc.classList.add('instant');      // sang thẻ mới: úp thẻ ngay, không quay ngược
+      fc.classList.toggle('back', flipped);
+      $('#fcF').innerHTML = face(rev ? c.en : c.vn, rev, 'Nói to câu trả lời, rồi chạm để lật');
+      $('#fcB').innerHTML = face(rev ? c.vn : c.en, !rev, 'Ngày ' + c.day + ' · chạm để lật lại');
+      $('#fcF').setAttribute('aria-hidden', flipped); $('#fcB').setAttribute('aria-hidden', !flipped);
+      fc.setAttribute('aria-label', flipped ? 'Úp thẻ' : 'Lật thẻ');
+      if (instant) { void fc.offsetWidth; fc.classList.remove('instant'); }
+      var of = opt.removeOnGrade ? total : cards.length;
+      $('#fcPos').textContent = (opt.removeOnGrade ? graded + 1 : pos + 1) + '/' + of;
+      $('#fcBar').style.width = ((opt.removeOnGrade ? graded : pos + 1) / of * 100) + '%';
+      if ($('#fcYes')) { $('#fcFlip').hidden = flipped; $('#fcYes').hidden = $('#fcNo').hidden = !flipped; }
+    }
+    function go(k) { if (!cards.length) return; pos = (pos + k + cards.length) % cards.length; flipped = false; show(true); }
     function flip() { if (!cards.length) return; flipped = !flipped; show(); if (flipped && !$('#fcDir').checked) playPhrase(cur().src, cur().en, 1); }
     var swiped = false, tx = 0, ty = 0;
     fc.addEventListener('touchstart', function (e) { swiped = false; tx = e.touches[0].clientX; ty = e.touches[0].clientY; }, { passive: true });
@@ -752,21 +867,26 @@
     }, { passive: true });
     fc.onclick = function () { if (swiped) { swiped = false; return; } flip(); };
     fc.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } };
+    $('#fcFlip').onclick = flip;
     $('#fcPrev').onclick = function () { go(-1); }; $('#fcNext').onclick = function () { go(1); };
-    if ($('#fcShuf')) $('#fcShuf').onclick = function () { for (var i = order.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)), t = order[i]; order[i] = order[j]; order[j] = t; } pos = 0; flipped = false; show(); toast('Đã trộn thẻ'); };
+    if ($('#fcShuf')) $('#fcShuf').onclick = function () { for (var i = order.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)), t = order[i]; order[i] = order[j]; order[j] = t; } pos = 0; flipped = false; show(true); toast('Đã trộn thẻ'); };
     $('#fcSay').onclick = function () { if (cards.length) playPhrase(cur().src, cur().en, 1); };
-    $('#fcDir').onchange = function () { flipped = false; show(); };
+    $('#fcDir').onchange = function () { flipped = false; show(true); };
     function grade(ok) {
-      srsGrade(cur().key, ok);
-      if (opt.removeOnGrade) { cards.splice(order[pos], 1); order = cards.map(function (_, i) { return i; }); if (pos >= cards.length) pos = 0; flipped = false; show(); if (opt.onChange) opt.onChange(); }
-      else { toast(ok ? 'Đã ghi: nhớ' : 'Đã ghi: chưa nhớ – sẽ gặp lại sớm'); go(1); }
+      if (!cards.length || !flipped) return;
+      srsGrade(cur().key, ok); haptic();
+      if (opt.removeOnGrade) {
+        graded++; if (ok) known++;
+        cards.splice(order[pos], 1); order = cards.map(function (_, i) { return i; }); if (pos >= cards.length) pos = 0;
+        flipped = false; show(true); if (opt.onChange) opt.onChange();
+      } else { toast(ok ? 'Đã ghi: nhớ' : 'Đã ghi: chưa nhớ – sẽ gặp lại sớm'); go(1); }
     }
     if ($('#fcYes')) { $('#fcYes').onclick = function () { grade(true); }; $('#fcNo').onclick = function () { grade(false); }; }
     document.onkeydown = function (e) {
-      if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+      if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) || modals.length) return;
       if (e.key === 'ArrowRight') go(1); else if (e.key === 'ArrowLeft') go(-1);
     };
-    show();
+    show(true);
   }
 
   function renderReview(d) {
@@ -839,14 +959,14 @@
     document.title = 'Ôn ngắt quãng — English for Remote IT';
     var keys = Object.keys(S.srs).filter(function (k) { return CARD[k]; }), due = srsDue();
     var boxes = [0, 0, 0, 0, 0]; keys.forEach(function (k) { boxes[S.srs[k].box - 1]++; });
-    var h = '<div class="dayhead"><span class="badge">Ôn ngắt quãng</span><h1>Hộp ôn cụm từ</h1><div class="en">Spaced repetition · hộp Leitner</div></div>';
-    h += card('', 'Hôm nay: ' + due.length + ' thẻ đến hạn', 'Mỗi khi bạn hoàn thành một ngày học, 6 cụm từ được đưa vào hộp 1. Nhớ → lên hộp cao hơn và lâu hơn mới gặp lại (1 → 3 → 7 → 14 → 30 ngày). Chưa nhớ → về hộp 1, gặp lại ngày mai.',
-      '<div class="stats" style="margin:0">' + boxes.map(function (n, i) { return '<div class="stat"><b>' + n + '</b><span>Hộp ' + (i + 1) + ' · ôn sau ' + SRS_GAP[i + 1] + ' ngày</span></div>'; }).join('') + '</div>');
+    var h = '<div class="dayhead"><span class="badge">Ôn ngắt quãng</span><h1>Hộp ôn cụm từ</h1><div class="en">Hôm nay: ' + due.length + ' thẻ đến hạn' + (due.length ? ' · khoảng ' + Math.max(1, Math.round(due.length / 4)) + ' phút' : '') + '</div></div>';
     var cards = due.map(function (k) { return CARD[k]; }).sort(function (a, b) { return S.srs[a.key].box - S.srs[b.key].box || a.day - b.day; });
-    h += card('', 'Phiên ôn', '', flashcards(cards, { grade: true, shuffle: false }) + '<p class="meta" id="srsLeft"></p>');
+    h += '<section class="card srs-sess" aria-label="Phiên ôn">' + flashcards(cards, { grade: true, shuffle: false }) + '</section>';
+    h += card('', 'Các hộp ôn', 'Mỗi khi bạn hoàn thành một ngày học, 6 cụm từ được đưa vào hộp 1. Nhớ → lên hộp cao hơn và lâu hơn mới gặp lại (1 → 3 → 7 → 14 → 30 ngày). Chưa nhớ → về hộp 1, gặp lại ngày mai.',
+      '<div class="stats" style="margin:0">' + boxes.map(function (n, i) { return '<div class="stat"><b>' + n + '</b><span>Hộp ' + (i + 1) + ' · ôn sau ' + SRS_GAP[i + 1] + ' ngày</span></div>'; }).join('') + '</div>');
     app.innerHTML = h;
-    function left() { $('#srsLeft').textContent = cards.length ? 'Còn ' + cards.length + ' thẻ trong phiên.' : (keys.length ? 'Hết thẻ đến hạn hôm nay. Quay lại vào ngày mai!' : ''); renderChrome('srs'); }
-    bindFlash(cards, { grade: true, removeOnGrade: true, onChange: left, empty: keys.length ? 'Không còn thẻ đến hạn hôm nay.' : 'Hộp ôn đang trống. Hoàn thành một ngày học để thêm cụm từ.' });
+    function left() { renderChrome('srs'); }
+    bindFlash(cards, { grade: true, removeOnGrade: true, onChange: left, empty: keys.length ? 'Không còn thẻ đến hạn hôm nay. Quay lại vào ngày mai!' : 'Hộp ôn đang trống. Hoàn thành một ngày học để thêm cụm từ.' });
     onLeave(function () { player.pause(); });
     left();
   }
@@ -889,5 +1009,15 @@
 
   window.addEventListener('beforeunload', save);
   window.__eri = { norm: norm, uses: uses, srsDue: srsDue, streak: streak, player: player, state: function () { return S; } };   // dùng cho test tự động
+  /* ---------- APK: nút Back Android — đóng sheet/onboarding → lùi trang → ở Hôm nay thì thoát app ---------- */
+  if (PL.App) PL.App.addListener('backButton', function (e) {
+    if (modals.length) { modals[modals.length - 1](); return; }
+    var h = location.hash || '#/';
+    if (h === '#/' || h === '#') PL.App.exitApp();
+    else if (e && e.canGoBack) history.back();
+    else location.hash = '#/';
+  });
+
   route();
+  if (!S.intro && !Object.keys(S.days).length) onboarding();   // lần đầu mở app
 })();

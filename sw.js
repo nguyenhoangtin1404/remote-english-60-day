@@ -1,7 +1,7 @@
 /* Service worker: chỉ hoạt động khi web được host qua http(s).
    App shell: cache trước. Audio: cache khi đã nghe 1 lần hoặc khi bấm "Tải audio học offline".
    Trình phát audio (nhất là Safari iOS) luôn gửi Range request → cắt từ bản cache trả 206 để tua/phát được khi offline. */
-var VER = 'eri60-v4';
+var VER = 'eri60-v5';
 var AUDIO = 'eri60-audio';
 var SHELL = ['./', 'index.html', 'style.css', 'app.js', 'data.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png',
   'fonts/be-vietnam-pro-latin-400-normal.woff2', 'fonts/be-vietnam-pro-latin-600-normal.woff2', 'fonts/be-vietnam-pro-latin-700-normal.woff2',

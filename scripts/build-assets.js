@@ -13,7 +13,7 @@ for (const sub of ['latin', 'vietnamese']) for (const w of [400, 600, 700]) {
 const ICONS = ['house', 'map', 'repeat', 'settings', 'play', 'pause', 'volume-2', 'check', 'star', 'download', 'upload',
   'smartphone', 'flame', 'chevron-left', 'chevron-right', 'arrow-left', 'arrow-right', 'shuffle', 'mic', 'square', 'x',
   'sun', 'moon', 'monitor', 'lightbulb', 'trash-2', 'target', 'trophy', 'book-open', 'headphones', 'languages', 'pen-line',
-  'circle-check', 'info', 'lock', 'sparkles', 'rotate-ccw', 'clock', 'list-checks', 'message-square', 'hard-drive-download'];
+  'circle-check', 'info', 'lock', 'sparkles', 'rotate-ccw', 'clock', 'list-checks', 'message-square', 'hard-drive-download', 'calendar'];
 const sym = ICONS.map(n => {
   const s = fs.readFileSync(path.join(nm, 'lucide-static/icons', n + '.svg'), 'utf8');
   const inner = s.slice(s.indexOf('>', s.indexOf('<svg')) + 1, s.lastIndexOf('</svg>')).replace(/\s*\n\s*/g, '').trim();
