@@ -71,17 +71,24 @@
     voice = vs.filter(function (v) { return /natural|online|google/i.test(v.name); })[0] || vs[0] || null;
   }
   if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
-  function playPhrase(src, text, rate) {
+  function playPhrase(src, text, rate, onend) {   // onend: gọi khi đọc xong (dùng cho "Nghe tất cả")
     rate = rate || 1;
-    if (src) { player.pause(); player.src = src; player.playbackRate = rate; player.play().catch(function () { tts(text, rate); }); return; }
-    tts(text, rate);
+    player.onended = player.onerror = null;
+    if (onend) { var cb = onend, fired = false; onend = function () { if (!fired) { fired = true; cb(); } }; }
+    if (src) {
+      player.pause(); player.src = src; player.playbackRate = rate;
+      if (onend) player.onended = player.onerror = function () { player.onended = player.onerror = null; onend(); };
+      player.play().catch(function () { player.onended = player.onerror = null; tts(text, rate, onend); });
+      return;
+    }
+    tts(text, rate, onend);
   }
-  function tts(text, rate) {
-    if (!('speechSynthesis' in window)) { toast('Trình duyệt không hỗ trợ đọc giọng nói'); return; }
+  function tts(text, rate, onend) {
+    if (!('speechSynthesis' in window)) { toast('Trình duyệt không hỗ trợ đọc giọng nói'); if (onend) onend(); return; }
     if (!voice) toast('Máy chưa có giọng tiếng Anh (en-US) – âm thanh có thể sai. Cài thêm trong Cài đặt › Giọng nói của Windows.');
     speechSynthesis.cancel();
     var u = new SpeechSynthesisUtterance(String(text).replace(/\.\.\.|…/g, ' ').replace(/’/g, "'"));
-    u.lang = 'en-US'; u.rate = 0.9 * rate; if (voice) u.voice = voice;
+    u.lang = 'en-US'; u.rate = 0.9 * rate; if (voice) u.voice = voice; if (onend) u.onend = onend;
     speechSynthesis.speak(u);
   }
   onLeave(function () {});
@@ -373,16 +380,17 @@
   function card(num, title, hint, body, id) {
     return '<section class="card"' + (id ? ' id="' + id + '"' : '') + '><h2>' + (num ? '<span class="num" aria-hidden="true">' + num + '</span>' : '') + esc(title) + '</h2>' + (hint ? '<p class="hint">' + hint + '</p>' : '') + body + '</section>';
   }
-  // Thanh chuyển nhanh giữa các phần trong 1 ngày (dính dưới topbar). labels ứng với các <section.card> theo thứ tự.
+  // Thanh bước dính dưới topbar: mỗi phần của bài là một đoạn; đoạn đang xem tô màu chính, đoạn đã xong tô xanh.
   function secnav(labels, doneFn) {
     var secs = $$('section.card', app).slice(0, labels.length), headEl = $('.dayhead', app);
     if (!secs.length || !headEl) return;
     var nav = document.createElement('nav'); nav.className = 'secnav'; nav.setAttribute('aria-label', 'Các phần của bài');
-    nav.innerHTML = labels.map(function (l, i) { return '<button type="button" data-i="' + i + '">' + esc(l) + '</button>'; }).join('');
+    nav.style.setProperty('--n', labels.length);
+    nav.innerHTML = labels.map(function (l, i) { return '<button type="button" data-i="' + i + '"><i></i><span>' + esc(l) + '</span></button>'; }).join('');
     headEl.insertAdjacentElement('afterend', nav);
     var btns = $$('button', nav);
     btns.forEach(function (b, i) { b.onclick = function () { secs[i].scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); }; });
-    function mark(i) { btns.forEach(function (b, k) { b.classList.toggle('on', k === i); }); var b = btns[i]; if (b) nav.scrollTo({ left: b.offsetLeft - nav.clientWidth / 2 + b.offsetWidth / 2, behavior: 'smooth' }); }
+    function mark(i) { btns.forEach(function (b, k) { b.classList.toggle('on', k === i); if (k === i) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current'); }); }
     if ('IntersectionObserver' in window) {
       var io = new IntersectionObserver(function (es) {
         es.forEach(function (e) { if (e.isIntersecting) mark(secs.indexOf(e.target)); });
@@ -390,7 +398,7 @@
       secs.forEach(function (s) { io.observe(s); }); onLeave(function () { io.disconnect(); });
     }
     function ticks() { if (!doneFn) return; var d = doneFn(); btns.forEach(function (b, i) { b.classList.toggle('ok', !!d[i]); }); }
-    if (doneFn) { app.addEventListener('input', ticks); app.addEventListener('change', ticks); onLeave(function () { app.removeEventListener('input', ticks); app.removeEventListener('change', ticks); }); ticks(); }
+    if (doneFn) { app.addEventListener('input', ticks); app.addEventListener('change', ticks); app.addEventListener('step', ticks); onLeave(function () { app.removeEventListener('input', ticks); app.removeEventListener('change', ticks); app.removeEventListener('step', ticks); }); ticks(); }
     mark(0);
   }
   function filled(arr, n) { for (var i = 0; i < n; i++) if (!String((arr || [])[i] || '').trim()) return false; return true; }
@@ -410,10 +418,10 @@
     return card('', 'Ghi chú & tự chấm', 'Ghi lại từ mới, lỗi hay gặp hoặc câu muốn dùng thật trong công việc.',
       '<textarea data-k="notes" aria-label="Ghi chú" placeholder="Ghi chú của bạn…" style="min-height:80px">' + esc(st.notes || '') + '</textarea>' +
       '<div class="row" style="margin-top:8px"><span class="meta">Hôm nay bạn tự tin mức nào?</span><span class="stars" role="group" aria-label="Tự chấm">' + stars + '</span></div>') +
-      '<div class="complete"><div><b>' + (st.done ? 'Đã hoàn thành ngày ' + d.day : 'Xong bài hôm nay?') + '</b><div class="meta">Tiến độ được lưu tự động trên máy.' + (d.phrases && !st.done ? ' Hoàn thành sẽ đưa 6 cụm từ vào hộp ôn ngắt quãng.' : '') + '</div></div>' +
-      '<button type="button" class="btn ' + (st.done ? '' : 'ok') + '" id="doneBtn">' + (st.done ? 'Bỏ đánh dấu' : ic('check') + 'Hoàn thành ngày ' + d.day) + '</button></div>' +
       '<nav class="navbtns" aria-label="Chuyển ngày">' + (p ? '<a class="btn" href="#/day/' + p.day + '">' + ic('arrow-left') + 'Ngày ' + p.day + '</a>' : '<span></span>') +
-      (n ? '<a class="btn primary" href="#/day/' + n.day + '">Ngày ' + n.day + ic('arrow-right') + '</a>' : '<a class="btn primary" href="#/assess">Tự đánh giá cuối khoá' + ic('arrow-right') + '</a>') + '</nav>';
+      (n ? '<a class="btn" href="#/day/' + n.day + '">Ngày ' + n.day + ic('arrow-right') + '</a>' : '<a class="btn" href="#/assess">Tự đánh giá cuối khoá' + ic('arrow-right') + '</a>') + '</nav>' +
+      '<p class="meta" style="text-align:center;margin:var(--s-4) 0 0">Tiến độ được lưu tự động trên máy.</p>' +
+      '<div class="done-bar" id="doneBar" role="region" aria-label="Hoàn thành ngày"></div>';
   }
   function missing(d) {
     var st = D(d.day), m = [];
@@ -443,39 +451,130 @@
     $$('.stars button', app).forEach(function (b) {
       b.onclick = function () { st.stars = +b.getAttribute('data-s'); save(); $$('.stars button', app).forEach(function (x) { var s = +x.getAttribute('data-s'); x.classList.toggle('on', s <= st.stars); x.setAttribute('aria-pressed', s === st.stars); }); };
     });
-    $('#doneBtn').onclick = function () {
-      if (!st.done) {
-        var m = missing(d);
-        if (m.length && !confirm('Còn phần chưa làm:\n• ' + m.join('\n• ') + '\n\nVẫn đánh dấu hoàn thành?')) return;
+
+    // thanh "Hoàn thành ngày" dính ở đáy, cập nhật theo tiến độ từng phần
+    var bar = $('#doneBar'), nx = DAYS[DAYS.indexOf(d) + 1];
+    function updBar() {
+      var steps = dayProgress(d), k = steps.filter(function (s) { return s[1]; }).length;
+      bar.classList.toggle('is-done', !!st.done);
+      if (st.done) {
+        bar.innerHTML = '<div class="db-txt"><b>' + ic('circle-check') + 'Đã hoàn thành ngày ' + d.day + '</b><button type="button" class="link" id="undoBtn">Bỏ đánh dấu</button></div>' +
+          (nx ? '<a class="btn primary" href="#/day/' + nx.day + '">Ngày ' + nx.day + ic('arrow-right') + '</a>' : '<a class="btn primary" href="#/assess">Tự đánh giá' + ic('arrow-right') + '</a>');
+        $('#undoBtn').onclick = function () { st.done = false; save(); updBar(); renderChrome(d.day); toast('Đã bỏ đánh dấu ngày ' + d.day); };
+      } else {
+        bar.innerHTML = '<div class="db-txt"><b class="num">' + k + '/' + steps.length + ' phần đã xong</b><span class="db-bar" aria-hidden="true"><i style="width:' + (k / steps.length * 100) + '%"></i></span></div>' +
+          '<button type="button" class="btn ok" id="doneBtn">' + ic('check') + 'Hoàn thành</button>';
+        $('#doneBtn').onclick = complete;
       }
-      st.done = !st.done;
-      if (st.done) logActivity();
-      if (st.done && d.phrases) srsAddDay(d.day);
-      save();
-      if (st.done) { toast('Hoàn thành ngày ' + d.day + '!'); var n = DAYS[DAYS.indexOf(d) + 1]; if (n) { setTimeout(function () { location.hash = '#/day/' + n.day; }, 600); return; } }
-      renderDay(d); renderChrome(d.day);
-    };
+    }
+    function finish() {
+      st.done = true; logActivity(); if (d.phrases) srsAddDay(d.day); save();
+      toast('Hoàn thành ngày ' + d.day + ' — tuyệt vời!');
+      if (nx) setTimeout(function () { if (location.hash === '#/day/' + d.day) location.hash = '#/day/' + nx.day; }, 700);
+      else { updBar(); renderChrome(d.day); }
+    }
+    function complete() {
+      var m = missing(d);
+      if (!m.length) { finish(); return; }
+      sheet('<h2 id="shT">Còn ' + m.length + ' phần chưa làm</h2><ul class="miss">' + m.map(function (x) { return '<li>' + ic('info') + '<span>' + esc(x) + '</span></li>'; }).join('') + '</ul>' +
+        '<p class="meta">Bạn vẫn có thể đánh dấu hoàn thành và quay lại làm sau.</p>', [['Tiếp tục học', '', null], ['Vẫn hoàn thành', 'ok', finish]]);
+    }
+    var t; function soon() { clearTimeout(t); t = setTimeout(updBar, 150); }
+    app.addEventListener('input', soon); app.addEventListener('change', soon); app.addEventListener('step', soon);
+    onLeave(function () { clearTimeout(t); app.removeEventListener('input', soon); app.removeEventListener('change', soon); app.removeEventListener('step', soon); });
+    updBar();
+
     $$('[data-reveal]', app).forEach(function (b) {
       b.onclick = function () { var box = document.getElementById(b.getAttribute('data-reveal')); var on = box.classList.toggle('show-ans'); b.textContent = on ? 'Ẩn đáp án' : 'Xem đáp án'; b.setAttribute('aria-expanded', on); if (b.onreveal) b.onreveal(on); };
     });
   }
+  function stepChanged() { app.dispatchEvent(new Event('step')); }
 
-  function phrasesTable(d) {
-    return '<table class="ph" id="phT">' + d.phrases.map(function (p, i) {
-      return '<tr><td style="width:40px"><button type="button" class="say" data-i="' + i + '" aria-label="Nghe: ' + esc(p[0]) + '">' + ic('volume-2') + '</button></td>' +
-        '<td class="en" lang="en">' + esc(p[0]) + '</td><td class="vn"><span tabindex="0" role="button" aria-label="Nghĩa tiếng Việt">' + esc(p[1]) + '</span></td></tr>';
-    }).join('') + '</table>';
+  /* ---------- bottom sheet (thay confirm() của trình duyệt) ---------- */
+  function sheet(html, buttons) {
+    var prev = document.activeElement, w = document.createElement('div'), closed = false;
+    w.className = 'sheet-wrap';
+    w.innerHTML = '<div class="sheet-scrim"></div><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shT">' + html + '<div class="sheet-act">' +
+      buttons.map(function (b, i) { return '<button type="button" class="btn lg ' + b[1] + '" data-i="' + i + '">' + b[0] + '</button>'; }).join('') + '</div></div>';
+    document.body.appendChild(w); document.body.classList.add('lock');
+    requestAnimationFrame(function () { w.classList.add('open'); });
+    function close(fn) {
+      if (closed) return; closed = true;
+      document.removeEventListener('keydown', key); w.classList.remove('open'); document.body.classList.remove('lock');
+      setTimeout(function () { w.remove(); }, 260);
+      if (prev && prev.isConnected && prev.focus) prev.focus();
+      if (fn) fn();
+    }
+    function key(e) {
+      if (e.key === 'Escape') { close(); return; }
+      if (e.key !== 'Tab') return;
+      var f = $$('button', w), a = f[0], z = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); } else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
+    }
+    document.addEventListener('keydown', key);
+    $('.sheet-scrim', w).onclick = function () { close(); };
+    $$('.sheet-act button', w).forEach(function (b) { b.onclick = function () { close(buttons[+b.getAttribute('data-i')][2]); }; });
+    $('.sheet-act button', w).focus();
+    onLeave(function () { close(); });
+  }
+
+  /* ---------- trình phát audio (bọc thẻ <audio> ẩn để giao diện giống nhau trên mọi máy) ---------- */
+  function audioUI(id, src) {
+    return '<div class="ap"><audio id="' + id + '" preload="none" src="' + esc(src) + '"></audio>' +
+      '<button type="button" class="ap-play" aria-label="Phát">' + ic('play', 'fill') + '</button>' +
+      '<div class="ap-mid"><input type="range" class="ap-seek" min="0" max="1000" step="1" value="0" aria-label="Vị trí phát">' +
+      '<div class="ap-time"><span class="ap-cur num">0:00</span><span class="ap-dur num">--:--</span></div></div>' +
+      '<button type="button" class="ap-back" aria-label="Lùi 5 giây">' + ic('rotate-ccw') + '<span>5</span></button></div>';
+  }
+  function bindAudioUI(id) {
+    var a = document.getElementById(id), root = a.parentNode, play = $('.ap-play', root), seek = $('.ap-seek', root), cur = $('.ap-cur', root), dur = $('.ap-dur', root), drag = false;
+    function fmt(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + ('0' + s % 60).slice(-2); }
+    function fill() { seek.style.setProperty('--p', seek.value / 10 + '%'); }
+    function sync() { var on = !a.paused; play.innerHTML = ic(on ? 'pause' : 'play', 'fill'); play.setAttribute('aria-label', on ? 'Tạm dừng' : 'Phát'); root.classList.toggle('playing', on); }
+    function tick() {
+      var ok = a.duration && isFinite(a.duration);
+      if (!drag) seek.value = ok ? Math.round(a.currentTime / a.duration * 1000) : 0;
+      cur.textContent = fmt(a.currentTime); dur.textContent = ok ? fmt(a.duration) : '--:--'; fill();
+    }
+    play.onclick = function () { if (a.paused) a.play().catch(function () { toast('Không phát được audio'); }); else a.pause(); };
+    $('.ap-back', root).onclick = function () { a.currentTime = Math.max(0, a.currentTime - 5); };
+    seek.oninput = function () { drag = true; if (a.duration) cur.textContent = fmt(seek.value / 1000 * a.duration); fill(); };
+    seek.onchange = function () { drag = false; if (a.duration && isFinite(a.duration)) a.currentTime = seek.value / 1000 * a.duration; };
+    ['play', 'pause', 'ended'].forEach(function (e) { a.addEventListener(e, sync); });
+    ['timeupdate', 'loadedmetadata', 'durationchange', 'emptied'].forEach(function (e) { a.addEventListener(e, tick); });
+    onLeave(function () { a.pause(); });
+    sync(); tick();
+  }
+
+  function phrasesList(d) {
+    return '<div class="ph-list" id="phT">' + d.phrases.map(function (p, i) {
+      return '<div class="ph-item"><button type="button" class="say" data-i="' + i + '" aria-label="Nghe: ' + esc(p[0]) + '">' + ic('volume-2') + '</button>' +
+        '<div class="ph-txt"><div class="en" lang="en">' + esc(p[0]) + '</div><div class="vn"><span tabindex="0" role="button" aria-label="Nghĩa tiếng Việt: ' + esc(p[1]) + '">' + esc(p[1]) + '</span></div></div></div>';
+    }).join('') + '</div>';
+  }
+  // Tô những từ trong đáp án mà câu của bạn cũng có (đã chuẩn hoá I'm = I am…)
+  function markAns(user, ans) {
+    var have = {}; norm(user).trim().split(' ').forEach(function (w) { if (w) have[w] = 1; });
+    return String(ans).split(/(\s+)/).map(function (w) {
+      var k = norm(w).trim();
+      return k && k.split(' ').every(function (t) { return have[t]; }) ? '<mark>' + esc(w) + '</mark>' : esc(w);
+    }).join('');
   }
 
   /* ---------- ghi âm (nhiều lần, gắn với trang hiện tại) ---------- */
   function recorderBlock() {
-    return '<div class="row"><button type="button" class="btn rec" id="recBtn">' + ic('mic') + 'Ghi âm</button><span class="meta" id="recInfo" aria-live="polite">Ghi âm giọng nói để nghe lại (cần cho phép micro).</span></div>' +
-      '<div id="recOut" style="margin-top:8px"></div>';
+    return '<div class="rec"><button type="button" class="rec-btn" id="recBtn" aria-label="Bắt đầu ghi âm">' + ic('mic') + '</button>' +
+      '<div class="rec-info"><b id="recState">Chạm để ghi âm</b><span class="meta" id="recInfo" aria-live="polite">Nói 60–90 giây rồi nghe lại (cần cho phép micro).</span></div></div>' +
+      '<div id="recOut"></div>';
   }
   function bindRecorder(d, onTake) {
-    var btn = $('#recBtn'), info = $('#recInfo'), out = $('#recOut'); if (!btn) return;
-    if (!navigator.mediaDevices || !window.MediaRecorder) { btn.disabled = true; info.textContent = 'Trình duyệt không hỗ trợ ghi âm. Hãy dùng Chrome/Edge bản mới.'; return; }
+    var btn = $('#recBtn'), state = $('#recState'), info = $('#recInfo'), out = $('#recOut'); if (!btn) return;
+    if (!navigator.mediaDevices || !window.MediaRecorder) { btn.disabled = true; state.textContent = 'Không ghi âm được'; info.textContent = 'Trình duyệt không hỗ trợ ghi âm. Hãy dùng Chrome/Edge bản mới.'; return; }
     var rec = null, stream = null, timer = null, alive = true, urls = [], takes = 0;
+    function idle(msg) {
+      btn.classList.remove('on'); btn.innerHTML = ic('mic'); btn.setAttribute('aria-label', takes ? 'Ghi lần ' + (takes + 1) : 'Bắt đầu ghi âm');
+      state.textContent = takes ? 'Ghi lần ' + (takes + 1) : 'Chạm để ghi âm'; if (msg) info.textContent = msg;
+    }
     function stopAll() { clearInterval(timer); if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
     onLeave(function () { alive = false; try { if (rec && rec.state === 'recording') rec.stop(); } catch (e) {} stopAll(); urls.forEach(function (u) { URL.revokeObjectURL(u); }); });
     btn.onclick = function () {
@@ -489,18 +588,18 @@
           if (!alive) return;                       // đã rời trang → bỏ bản ghi, không chèn vào trang khác
           var blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' }), url = URL.createObjectURL(blob); urls.push(url); takes++;
           var ext = /ogg/.test(blob.type) ? 'ogg' : /mp4/.test(blob.type) ? 'm4a' : 'webm';
-          var div = document.createElement('div'); div.className = 'player'; div.style.marginTop = '6px';
-          div.innerHTML = '<div class="meta"><b>Lần ' + takes + '</b></div><audio controls src="' + url + '"></audio><div class="row" style="margin-top:6px">' +
-            '<a class="btn" download="Ngay' + (d.day < 10 ? '0' : '') + d.day + '_ghi_am_lan' + takes + '.' + ext + '" href="' + url + '">' + ic('download') + 'Tải bản ghi</a>' +
-            '<span class="meta">Bản ghi không tự lưu – tải về nếu muốn giữ.</span></div>';
-          out.appendChild(div);
-          btn.innerHTML = ic('mic') + 'Ghi lần ' + (takes + 1); btn.classList.add('rec'); info.textContent = 'Nghe lại, ghi lỗi, rồi nói lại lần ' + (takes + 1) + '.';
+          var div = document.createElement('div'); div.className = 'take';
+          div.innerHTML = '<div class="take-h"><b>Lần ' + takes + '</b><a class="btn ghost sm" download="Ngay' + (d.day < 10 ? '0' : '') + d.day + '_ghi_am_lan' + takes + '.' + ext + '" href="' + url + '">' + ic('download') + 'Tải về</a></div>' +
+            audioUI('take' + takes, url);
+          out.appendChild(div); bindAudioUI('take' + takes);
+          idle('Nghe lại, ghi lỗi, rồi nói lại lần ' + (takes + 1) + '. Bản ghi không tự lưu – tải về nếu muốn giữ.');
           if (onTake) onTake(takes);
         };
         rec.start(); var t0 = Date.now();
-        btn.innerHTML = ic('square', 'fill') + 'Dừng'; btn.classList.remove('rec');
-        timer = setInterval(function () { info.textContent = 'Đang ghi… ' + Math.round((Date.now() - t0) / 1000) + ' giây'; }, 500);
-      }).catch(function () { info.textContent = 'Không truy cập được micro. Hãy cho phép quyền micro cho trang này.'; });
+        btn.classList.add('on'); btn.innerHTML = ic('square', 'fill'); btn.setAttribute('aria-label', 'Dừng ghi âm');
+        state.textContent = 'Đang ghi… 0:00'; info.textContent = 'Chạm lần nữa để dừng.';
+        timer = setInterval(function () { var s = Math.round((Date.now() - t0) / 1000); state.textContent = 'Đang ghi… ' + Math.floor(s / 60) + ':' + ('0' + s % 60).slice(-2); }, 500);
+      }).catch(function () { idle('Không truy cập được micro. Hãy cho phép quyền micro cho ứng dụng.'); });
     };
   }
 
@@ -508,16 +607,21 @@
   function renderLesson(d) {
     var st = D(d.day), h = head(d, 'Thời gian: 30 phút');
     var hasShadow = !!d.audio_shadow;
-    h += card(1, 'Cụm từ hôm nay', 'Nghe và đọc to mỗi cụm 3 lần. Bản <b>Shadowing</b> đọc mỗi cụm 2 lần, sau mỗi lần có khoảng lặng để bạn nhại theo. Bật "Che nghĩa" để tự kiểm tra – chạm vào ô mờ để xem.',
-      '<div class="player" style="margin-bottom:8px">' + (hasShadow ? '<div class="row" style="margin-bottom:8px">' + seg('phMode', [['read', 'Đọc liền'], ['shadow', 'Shadowing']], 'read', 'Kiểu nghe cụm từ') + '</div>' : '') +
-      '<audio controls preload="none" id="phAudio" src="' + esc(d.audio_phrases) + '"></audio></div>' +
-      '<div class="row"><label class="meta"><input type="checkbox" id="hideVN"> Che nghĩa tiếng Việt</label>' +
-      '<span class="meta" style="margin-left:auto">Tốc độ</span>' + seg('rateSeg', [['1', 'Thường'], ['0.75', 'Chậm']], '1', 'Tốc độ đọc từng cụm') + '</div>' +
-      phrasesTable(d));
-    h += card(2, 'Dịch sang tiếng Anh', 'Tự dịch trước, sau đó bấm "Xem đáp án". Đáp án là một cách diễn đạt tham khảo – câu khác đúng ngữ pháp, đúng ý vẫn được chấp nhận.',
+    h += card(1, 'Cụm từ hôm nay', 'Nghe và đọc to mỗi cụm 3 lần. Bật <b>Che nghĩa</b> để tự kiểm tra – chạm vào ô mờ để xem nghĩa.',
+      '<div class="ph-tools"><button type="button" class="btn" id="playAll">' + ic('play') + 'Nghe tất cả</button>' +
+      seg('rateSeg', [['1', '1×'], ['0.75', '0.75×']], '1', 'Tốc độ đọc từng cụm') +
+      '<label class="switch"><input type="checkbox" id="hideVN"><span class="track" aria-hidden="true"></span>Che nghĩa</label></div>' +
+      phrasesList(d) +
+      '<div class="sub-h"><span>Bài đọc cả nhóm</span>' + (hasShadow ? seg('phMode', [['read', 'Đọc liền'], ['shadow', 'Shadowing']], 'read', 'Kiểu nghe cụm từ') : '') + '</div>' +
+      (hasShadow ? '<p class="meta" style="margin:0 0 var(--s-2)">Shadowing đọc mỗi cụm 2 lần, sau mỗi lần có khoảng lặng để bạn nhại theo.</p>' : '') +
+      audioUI('phAudio', d.audio_phrases));
+    h += card(2, 'Dịch sang tiếng Anh', 'Tự dịch trước rồi bấm "Kiểm tra". Đáp án là một cách diễn đạt tham khảo – câu khác đúng ngữ pháp, đúng ý vẫn được chấp nhận.',
       '<div id="trBox">' + d.trans.map(function (t, i) {
-        return '<div class="q"><label for="tr' + i + '">' + (i + 1) + '. ' + esc(t) + '</label><input type="text" id="tr' + i + '" lang="en" data-k="trans" data-i="' + i + '" value="' + esc((st.trans || [])[i] || '') + '" placeholder="Your English…"><div class="ans">' + ic('check') + ' ' + esc(d.trans_ans[i] || '') + '</div></div>';
-      }).join('') + '</div><button type="button" class="btn" data-reveal="trBox" aria-expanded="false">Xem đáp án</button>');
+        return '<div class="q" id="trq' + i + '"><label for="tr' + i + '">' + (i + 1) + '. ' + esc(t) + '</label>' +
+          '<div class="q-row"><input type="text" id="tr' + i + '" lang="en" data-k="trans" data-i="' + i + '" value="' + esc((st.trans || [])[i] || '') + '" placeholder="Your English…">' +
+          '<button type="button" class="btn" data-chk="' + i + '" aria-expanded="false" aria-controls="tra' + i + '">Kiểm tra</button></div>' +
+          '<div class="ans" id="tra' + i + '" lang="en"></div></div>';
+      }).join('') + '</div><p class="meta" style="margin:0">Phần <mark>tô màu</mark> là các từ trong đáp án trùng với câu của bạn.</p>');
     h += card(3, 'Viết ứng dụng — dùng ít nhất 3 cụm từ hôm nay', esc(d.write),
       '<textarea id="wr" lang="en" data-k="write" aria-label="Bài viết" placeholder="Write here…">' + esc(st.write || '') + '</textarea>' +
       '<div class="chips" id="chips">' + d.phrases.map(function (p, i) { return '<span class="chip" data-i="' + i + '">' + esc(p[0]) + '</span>'; }).join('') + '</div>' +
@@ -527,11 +631,11 @@
       recorderBlock() + '<div class="checks" style="margin-top:10px">' + checks.map(function (c, i) {
         return '<label><input type="checkbox" data-k="checks" data-i="' + i + '"' + ((st.checks || [])[i] ? ' checked' : '') + '> ' + c + '</label>';
       }).join('') + '</div>' + (d.criteria ? '<div class="tip"><b class="h">Tiêu chí bài tổng hợp</b>' + esc(d.criteria.replace(/^Tiêu chí bài tổng hợp:\s*/, '')) + '</div>' : ''));
-    h += card(5, 'Nghe — trả lời 3 câu hỏi', 'Lần 1: không nhìn transcript (dùng bản Chậm nếu cần). Lần 2: mở transcript để kiểm tra.',
-      '<div class="player"><div class="row" style="margin-bottom:8px">' + seg('spdSeg', [['n', 'Bình thường'], ['s', 'Chậm 0.75']], 'n', 'Tốc độ bài nghe') +
-      '<button type="button" class="btn" id="tsBtn" style="margin-left:auto" aria-expanded="false">Hiện transcript</button></div>' +
-      '<audio controls preload="none" id="lis" src="' + esc(d.audio) + '"></audio>' +
-      '<div class="transcript" id="ts" lang="en">' + esc(d.transcript) + '</div></div>' +
+    h += card(5, 'Nghe — trả lời 3 câu hỏi', 'Lần 1: không nhìn transcript (dùng tốc độ 0.75× nếu cần). Lần 2: mở transcript để kiểm tra.',
+      '<div class="sub-h"><span>Tốc độ bài nghe</span>' + seg('spdSeg', [['n', '1×'], ['s', '0.75×']], 'n', 'Tốc độ bài nghe') + '</div>' +
+      audioUI('lis', d.audio) +
+      '<button type="button" class="btn" id="tsBtn" aria-expanded="false" aria-controls="ts" style="margin-top:var(--s-3)">' + ic('book-open') + 'Hiện transcript</button>' +
+      '<div class="transcript" id="ts" lang="en">' + esc(d.transcript) + '</div>' +
       '<div id="lsBox">' + d.questions.map(function (q, i) {
         return '<div class="q"><label for="ls' + i + '">' + (i + 1) + '. ' + esc(q) + '</label><input type="text" id="ls' + i + '" data-k="listen" data-i="' + i + '" value="' + esc((st.listen || [])[i] || '') + '"><div class="ans">' + ic('check') + ' ' + esc(d.listen_ans[i] || '') + '</div></div>';
       }).join('') + '</div><button type="button" class="btn" data-reveal="lsBox" id="lsReveal" aria-expanded="false">Xem đáp án</button>' +
@@ -540,20 +644,48 @@
     h += footer(d);
     app.innerHTML = h;
     bindCommon(d);
-    secnav(['1 Cụm từ', '2 Dịch', '3 Viết', '4 Nói', '5 Nghe', 'Ghi chú'], function () {
+    secnav(['Cụm từ', 'Dịch', 'Viết', 'Nói', 'Nghe', 'Ghi chú'], function () {
       return [!!st.ph, filled(st.trans, 3), d.phrases.filter(function (p) { return uses(st.write || '', p[0]); }).length >= 3, filled(st.checks, 3), filled(st.listen, 3), !!st.stars];
     });
     bindRecorder(d, function (n) { var cb = $$('[data-k="checks"]', app)[0]; if (n >= 1 && cb && !cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change')); } });
+    bindAudioUI('phAudio'); bindAudioUI('lis');
 
-    var rate = 1;
-    $('#hideVN').onchange = function () { $('#phT').classList.toggle('hidevn', this.checked); $$('#phT td.vn span').forEach(function (s) { s.classList.remove('peek'); }); };
-    $$('#phT td.vn span').forEach(function (s) { s.onclick = s.onkeydown = function (e) { if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return; e.preventDefault(); s.classList.toggle('peek'); }; });
-    bindSeg('rateSeg', function (v) { rate = +v; $('#phAudio').playbackRate = rate; });
-    function heard() { if (!st.ph) { st.ph = true; saveSoon(); $('.secnav button').classList.add('ok'); } }
-    $$('#phT .say').forEach(function (b) { b.onclick = function () { heard(); var i = +b.getAttribute('data-i'); playPhrase(d.phrase_audio && d.phrase_audio[i], d.phrases[i][0], rate); }; });
-    var ph = $('#phAudio');
+    // --- cụm từ ---
+    var rate = 1, ph = $('#phAudio'), queue = false;
+    function heard() { if (!st.ph) { st.ph = true; saveSoon(); stepChanged(); } }
+    $('#hideVN').onchange = function () { $('#phT').classList.toggle('hidevn', this.checked); $$('#phT .vn span').forEach(function (s) { s.classList.remove('peek'); }); };
+    $$('#phT .vn span').forEach(function (s) { s.onclick = s.onkeydown = function (e) { if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return; e.preventDefault(); s.classList.toggle('peek'); }; });
+    bindSeg('rateSeg', function (v) { rate = +v; ph.playbackRate = rate; });
+    function stopQueue() {
+      if (!queue) return; queue = false; player.onended = player.onerror = null;
+      $$('#phT .ph-item').forEach(function (x) { x.classList.remove('playing'); });
+      $('#playAll').innerHTML = ic('play') + 'Nghe tất cả';
+      if (window.speechSynthesis) speechSynthesis.cancel(); player.pause();
+    }
+    function playIdx(i) {
+      if (!queue) return;
+      if (i >= d.phrases.length) { stopQueue(); return; }
+      $$('#phT .ph-item').forEach(function (x, k) { x.classList.toggle('playing', k === i); });
+      playPhrase(d.phrase_audio && d.phrase_audio[i], d.phrases[i][0], rate, function () { if (queue) setTimeout(function () { playIdx(i + 1); }, 800); });
+    }
+    $('#playAll').onclick = function () {
+      if (queue) { stopQueue(); return; }
+      ph.pause(); heard(); queue = true; this.innerHTML = ic('square', 'fill') + 'Dừng'; playIdx(0);
+    };
+    $$('#phT .say').forEach(function (b) { b.onclick = function () { stopQueue(); heard(); var i = +b.getAttribute('data-i'); playPhrase(d.phrase_audio && d.phrase_audio[i], d.phrases[i][0], rate); }; });
     if (hasShadow) bindSeg('phMode', function (v) { ph.pause(); ph.src = v === 'shadow' ? d.audio_shadow : d.audio_phrases; ph.load(); ph.playbackRate = rate; });
-    ph.addEventListener('play', function () { ph.playbackRate = rate; player.pause(); heard(); });
+    ph.addEventListener('play', function () { stopQueue(); ph.playbackRate = rate; player.pause(); heard(); });
+    onLeave(stopQueue);
+
+    // --- dịch: kiểm tra từng câu ---
+    function showAns(i) { var inp = $('#tr' + i); $('#tra' + i).innerHTML = ic('check') + ' ' + markAns(inp.value, d.trans_ans[i] || ''); }
+    $$('[data-chk]', app).forEach(function (b) {
+      var i = +b.getAttribute('data-chk'), q = $('#trq' + i);
+      b.onclick = function () { var on = q.classList.toggle('show-ans'); if (on) showAns(i); b.textContent = on ? 'Ẩn' : 'Kiểm tra'; b.setAttribute('aria-expanded', on); };
+      $('#tr' + i).addEventListener('input', function () { if (q.classList.contains('show-ans')) showAns(i); });
+    });
+
+    // --- nghe ---
     var lis = $('#lis');
     bindSeg('spdSeg', function (v) {
       var playing = !lis.paused, ratio = lis.duration ? lis.currentTime / lis.duration : 0;
@@ -561,14 +693,15 @@
       lis.addEventListener('loadedmetadata', function f() { lis.removeEventListener('loadedmetadata', f); if (ratio && lis.duration) lis.currentTime = ratio * lis.duration; if (playing) lis.play(); });
       lis.load();
     });
-    onLeave(function () { ph.pause(); lis.pause(); player.pause(); });
+    lis.addEventListener('play', function () { ph.pause(); stopQueue(); player.pause(); });
+    onLeave(function () { player.pause(); });
     function showCmp() { if (!words($('#wr').value)) return; $('#cmpMine').textContent = $('#wr').value; $('#cmp').style.display = ''; }
-    $('#tsBtn').onclick = function () { var o = $('#ts').classList.toggle('open'); this.textContent = o ? 'Ẩn transcript' : 'Hiện transcript'; this.setAttribute('aria-expanded', o); if (o) showCmp(); };
+    $('#tsBtn').onclick = function () { var o = $('#ts').classList.toggle('open'); this.innerHTML = ic('book-open') + (o ? 'Ẩn transcript' : 'Hiện transcript'); this.setAttribute('aria-expanded', o); if (o) showCmp(); };
     $('#lsReveal').onreveal = function (on) { if (on) showCmp(); };
     function upd() {
-      var t = $('#wr').value, used = 0;
+      var t = $('#wr').value, used = 0, n = words(t);
       $$('#chips .chip').forEach(function (c, i) { var u = uses(t, d.phrases[i][0]); c.classList.toggle('used', u); if (u) used++; });
-      $('#wc').innerHTML = words(t) + ' từ · đã dùng <b class="' + (used >= 3 ? 'pos' : '') + '">' + used + '/6</b> cụm từ' + (used >= 3 ? ' · đạt mục tiêu' : ' (mục tiêu ≥ 3)');
+      $('#wc').innerHTML = '<span class="num">' + n + '</span> từ · đã dùng <b class="' + (used >= 3 ? 'pos' : '') + '">' + used + '/6</b> cụm từ' + (used >= 3 ? ' · đạt mục tiêu' : ' (mục tiêu ≥ 3)') + (n && n < 40 ? ' · nên viết khoảng 40–80 từ' : '');
     }
     $('#wr').addEventListener('input', upd); upd();
   }
@@ -661,7 +794,7 @@
       '<div id="fcLock"><p class="meta" id="lockMsg"></p><button type="button" class="btn" id="unlock">Mở flashcard</button></div><div id="fcWrap" style="display:none">' + flashcards(cards, { grade: true }) + '</div>');
     h += footer(d);
     app.innerHTML = h; bindCommon(d); bindRecorder(d);
-    secnav(['A Nhớ lại', 'B Viết', 'C Nói', 'D Đối chiếu'], function () { return [filled(st.recall, 5), words(st.write) > 0, filled(st.rubric, 5), false]; });
+    secnav(['Nhớ lại', 'Viết', 'Nói', 'Đối chiếu'], function () { return [filled(st.recall, 5), words(st.write) > 0, filled(st.rubric, 5), false]; });
 
     // đồng hồ 30 phút + khoá flashcard 10 phút đầu
     function elapsed() { return st.start ? Math.floor((Date.now() - st.start) / 1000) : 0; }
