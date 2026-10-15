@@ -1,0 +1,10 @@
+node_modules/
+www/
+android/app/build/
+android/.gradle/
+android/build/
+*.apk
+dist/
+android/local.properties
+android/app/src/main/assets/public/
+.claude/

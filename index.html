@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>English for Remote IT &amp; Freelancer — 60 ngày</title>
+<meta name="description" content="Workbook 60 ngày luyện tiếng Anh giao tiếp cho lập trình viên remote và freelancer: cụm từ, dịch, viết, nói, nghe.">
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a href="#app" class="skip">Bỏ qua menu</a>
+<header class="topbar">
+  <button class="menu-btn" id="menuBtn" aria-label="Mở danh sách bài" aria-controls="sidebar" aria-expanded="false">☰</button>
+  <a href="#/" class="brand">English for Remote IT <span>· 60 ngày</span></a>
+  <div class="progress-mini" aria-label="Tiến độ"><div class="bar"><div id="miniBar"></div></div><span id="miniText">0/60</span></div>
+</header>
+<div class="layout">
+  <nav class="sidebar" id="sidebar" aria-label="Danh sách 60 ngày"></nav>
+  <main id="app" tabindex="-1"></main>
+</div>
+<div class="scrim" id="scrim" aria-hidden="true"></div>
+<nav class="tabbar" id="tabbar" aria-label="Điều hướng nhanh">
+  <a href="#/" data-tab="home"><span class="ic" aria-hidden="true">⌂</span>Trang chủ</a>
+  <a href="#/" data-tab="learn" id="tabLearn"><span class="ic" aria-hidden="true">▶</span>Học tiếp</a>
+  <a href="#/srs" data-tab="srs"><span class="ic" aria-hidden="true">↻</span>Ôn tập<span class="badge2" id="tabDue" hidden></span></a>
+  <button type="button" data-tab="menu" id="tabMenu" aria-controls="sidebar"><span class="ic" aria-hidden="true">☰</span>Danh sách</button>
+</nav>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<noscript><p style="padding:20px">Trang này cần bật JavaScript.</p></noscript>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

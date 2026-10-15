@@ -1,0 +1,7 @@
+{
+  "appId": "com.timondlab.remoteitenglish",
+  "appName": "Remote IT English",
+  "webDir": "www",
+  "android": { "allowMixedContent": false },
+  "server": { "androidScheme": "https" }
+}

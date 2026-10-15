@@ -1,0 +1,21 @@
+{
+  "name": "english-remote-it",
+  "version": "1.0.0",
+  "private": true,
+  "description": "English for Remote IT & Freelancer — 60 ngày (PWA + Android app)",
+  "scripts": {
+    "serve": "npx --yes http-server . -p 8080 -c-1",
+    "build:www": "node scripts/build-www.js",
+    "sync": "npm run build:www && npx cap sync android",
+    "apk": "npm run sync && cd android && gradlew.bat assembleDebug"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.2"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.2",
+    "@capacitor/core": "^6.2.2",
+    "@capacitor/filesystem": "^6.0.4",
+    "@capacitor/share": "^6.0.4"
+  }
+}

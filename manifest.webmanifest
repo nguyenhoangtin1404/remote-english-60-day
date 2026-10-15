@@ -1,0 +1,16 @@
+{
+  "name": "English for Remote IT & Freelancer — 60 ngày",
+  "short_name": "Remote IT English",
+  "description": "Workbook 60 ngày luyện tiếng Anh giao tiếp cho dev remote & freelancer",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f8fb",
+  "theme_color": "#0f172a",
+  "lang": "vi",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
