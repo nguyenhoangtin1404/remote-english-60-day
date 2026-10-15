@@ -1,9 +1,11 @@
 /* Service worker: chỉ hoạt động khi web được host qua http(s).
    App shell: cache trước. Audio: cache khi đã nghe 1 lần hoặc khi bấm "Tải audio học offline".
    Trình phát audio (nhất là Safari iOS) luôn gửi Range request → cắt từ bản cache trả 206 để tua/phát được khi offline. */
-var VER = 'eri60-v3';
+var VER = 'eri60-v4';
 var AUDIO = 'eri60-audio';
-var SHELL = ['./', 'index.html', 'style.css', 'app.js', 'data.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
+var SHELL = ['./', 'index.html', 'style.css', 'app.js', 'data.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png',
+  'fonts/be-vietnam-pro-latin-400-normal.woff2', 'fonts/be-vietnam-pro-latin-600-normal.woff2', 'fonts/be-vietnam-pro-latin-700-normal.woff2',
+  'fonts/be-vietnam-pro-vietnamese-400-normal.woff2', 'fonts/be-vietnam-pro-vietnamese-600-normal.woff2', 'fonts/be-vietnam-pro-vietnamese-700-normal.woff2'];
 self.addEventListener('install', function (e) { e.waitUntil(caches.open(VER).then(function (c) { return c.addAll(SHELL); }).then(function () { return self.skipWaiting(); })); });
 self.addEventListener('activate', function (e) {
   e.waitUntil(caches.keys().then(function (ks) { return Promise.all(ks.filter(function (k) { return k !== VER && k !== AUDIO; }).map(function (k) { return caches.delete(k); })); }).then(function () { return self.clients.claim(); }));
